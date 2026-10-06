@@ -117,7 +117,9 @@ def sidebar(service: MarketService):
     timeframe = st.sidebar.selectbox(
         "Timeframe", ["1m", "5m", "15m", "30m", "1h", "4h", "1d"], index=4
     )
-    limit = st.sidebar.slider("Candles", 100, 1000, 500, step=50)
+    limit = st.sidebar.select_slider(
+        "Candles loaded", options=[100, 250, 500, 750, 1000], value=500
+    )
     force_synthetic = st.sidebar.checkbox("Force synthetic data (offline)", value=False)
 
     if market == "forex":
@@ -201,76 +203,138 @@ def run_signal_panel(df, symbol, timeframe):
     return signal
 
 
-def candlestick_figure(df, show_bb=False, patterns=None):
+def build_chart_figure(
+    df,
+    chart_type="Candlestick",
+    show_ema=True,
+    show_bb=False,
+    show_volume=True,
+    show_rsi=True,
+    show_macd=True,
+    patterns=None,
+):
+    """Build an interactive price chart with optional indicator panels."""
+    rows = ["Price"]
+    if show_volume:
+        rows.append("Volume")
+    if show_rsi:
+        rows.append("RSI (14)")
+    if show_macd:
+        rows.append("MACD")
+
+    weights = {"Price": 6.0, "Volume": 2.0, "RSI (14)": 2.0, "MACD": 2.0}
+    heights = [weights.get(name, 2.0) for name in rows]
+    total = sum(heights)
+    heights = [h / total for h in heights]
+
     fig = make_subplots(
-        rows=3,
+        rows=len(rows),
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.6, 0.2, 0.2],
-        subplot_titles=("Price", "RSI (14)", "MACD"),
+        vertical_spacing=0.035,
+        row_heights=heights,
+        subplot_titles=rows,
     )
-    fig.add_trace(
-        go.Candlestick(
-            x=df.index,
-            open=df["open"],
-            high=df["high"],
-            low=df["low"],
-            close=df["close"],
-            name="Price",
-            increasing_line_color=COLOR_UP,
-            decreasing_line_color=COLOR_DOWN,
-        ),
-        row=1,
-        col=1,
-    )
-    for col, color in (("ema9", "#29b6f6"), ("ema21", "#ffa726"), ("ema50", "#ab47bc")):
-        if col in df.columns:
-            fig.add_trace(
-                go.Scatter(x=df.index, y=df[col], name=col.upper(), line=dict(color=color, width=1)),
-                row=1,
-                col=1,
-            )
+
+    price_row = 1
+    row_map = {"Price": price_row}
+    nxt = 2
+    if show_volume:
+        row_map["Volume"] = nxt
+        nxt += 1
+    if show_rsi:
+        row_map["RSI"] = nxt
+        nxt += 1
+    if show_macd:
+        row_map["MACD"] = nxt
+        nxt += 1
+
+    hover = [
+        f"{t.strftime('%Y-%m-%d %H:%M')} UTC"
+        f"<br>Open {o:.4f}  High {h:.4f}<br>Low {l:.4f}  Close {c:.4f}"
+        for t, o, h, l, c in zip(df.index, df["open"], df["high"], df["low"], df["close"])
+    ]
+
+    if chart_type == "OHLC bars":
+        fig.add_trace(
+            go.Ohlc(
+                x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+                name="Price", text=hover, hoverinfo="text",
+                increasing_line_color=COLOR_UP, decreasing_line_color=COLOR_DOWN,
+            ),
+            row=price_row, col=1,
+        )
+    elif chart_type == "Line":
+        fig.add_trace(
+            go.Scatter(
+                x=df.index, y=df["close"], name="Close", mode="lines",
+                line=dict(color="#29b6f6", width=1.5), text=hover, hoverinfo="text",
+            ),
+            row=price_row, col=1,
+        )
+    else:
+        fig.add_trace(
+            go.Candlestick(
+                x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+                name="Price", text=hover, hoverinfo="text",
+                increasing_line_color=COLOR_UP, decreasing_line_color=COLOR_DOWN,
+            ),
+            row=price_row, col=1,
+        )
+
+    if show_ema:
+        for col, color in (("ema9", "#29b6f6"), ("ema21", "#ffa726"), ("ema50", "#ab47bc")):
+            if col in df.columns:
+                fig.add_trace(
+                    go.Scatter(x=df.index, y=df[col], name=col.upper(), line=dict(color=color, width=1.2)),
+                    row=price_row, col=1,
+                )
     if show_bb and "bb_upper" in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df["bb_upper"], name="BB upper", line=dict(color="#78909c", width=1, dash="dot")), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df["bb_lower"], name="BB lower", line=dict(color="#78909c", width=1, dash="dot")), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df["bb_upper"], name="BB upper", line=dict(color="#78909c", width=1, dash="dot")), row=price_row, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df["bb_lower"], name="BB lower", line=dict(color="#78909c", width=1, dash="dot")), row=price_row, col=1)
 
-    if "rsi14" in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df["rsi14"], name="RSI", line=dict(color="#e040fb")), row=2, col=1)
-        fig.add_hline(y=70, line_dash="dash", line_color=COLOR_DOWN, row=2, col=1)
-        fig.add_hline(y=30, line_dash="dash", line_color=COLOR_UP, row=2, col=1)
-        fig.update_yaxes(range=[0, 100], row=2, col=1)
+    if show_volume and "volume" in df.columns:
+        vcolors = [COLOR_UP if c >= o else COLOR_DOWN for o, c in zip(df["open"], df["close"])]
+        fig.add_trace(
+            go.Bar(x=df.index, y=df["volume"], name="Volume", marker_color=vcolors, opacity=0.6),
+            row=row_map["Volume"], col=1,
+        )
 
-    if "macd" in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df["macd"], name="MACD", line=dict(color="#29b6f6")), row=3, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df["macd_signal"], name="Signal", line=dict(color="#ffa726")), row=3, col=1)
-        colors = ["#26a69a" if v >= 0 else "#ef5350" for v in df["macd_hist"].fillna(0)]
-        fig.add_trace(go.Bar(x=df.index, y=df["macd_hist"], name="Histogram", marker_color=colors), row=3, col=1)
+    if show_rsi and "rsi14" in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df["rsi14"], name="RSI", line=dict(color="#e040fb", width=1.2)), row=row_map["RSI"], col=1)
+        fig.add_hline(y=70, line_dash="dash", line_color=COLOR_DOWN, row=row_map["RSI"], col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color=COLOR_UP, row=row_map["RSI"], col=1)
+        fig.update_yaxes(range=[0, 100], row=row_map["RSI"], col=1)
+
+    if show_macd and "macd" in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df["macd"], name="MACD", line=dict(color="#29b6f6", width=1.2)), row=row_map["MACD"], col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df["macd_signal"], name="Signal", line=dict(color="#ffa726", width=1.2)), row=row_map["MACD"], col=1)
+        colors = [COLOR_UP if v >= 0 else COLOR_DOWN for v in df["macd_hist"].fillna(0)]
+        fig.add_trace(go.Bar(x=df.index, y=df["macd_hist"], name="Histogram", marker_color=colors, opacity=0.6), row=row_map["MACD"], col=1)
 
     if patterns:
         for event in patterns:
             fig.add_trace(
                 go.Scatter(
-                    x=[event["timestamp"]],
-                    y=[event["close"]],
-                    mode="markers+text",
-                    text=[event["pattern"]],
-                    textposition="top center",
-                    marker=dict(size=9, color="#ffd54f", symbol="star"),
-                    name=event["pattern"],
-                    showlegend=False,
+                    x=[event["timestamp"]], y=[event["close"]],
+                    mode="markers",
+                    marker=dict(size=8, color="#ffd54f", symbol="star"),
+                    name=event["pattern"], showlegend=False,
+                    hovertemplate=f"{event['pattern']}<br>{event.get('why', '')}<extra></extra>",
                 ),
-                row=1,
-                col=1,
+                row=price_row, col=1,
             )
 
     fig.update_layout(
         height=760,
         template="plotly_dark",
-        xaxis_rangeslider_visible=False,
-        legend=dict(orientation="h", y=1.02),
+        legend=dict(orientation="h", y=1.03),
         margin=dict(l=10, r=10, t=50, b=10),
+        hovermode="x unified",
+        dragmode="pan",
     )
+    fig.update_xaxes(rangeslider_visible=False)
+    fig.update_yaxes(title_text="Price", row=price_row, col=1)
     return fig
 
 
@@ -360,20 +424,176 @@ def page_market_explorer(sb, service):
     return data
 
 
+def render_quick_trade(result, key_prefix="qt", show_position_status=True):
+    """Buy/Sell (Long/Short) paper-order panel. Simulated orders only."""
+    account = st.session_state.account
+    rm = account.risk_manager
+    price = float(result.last_price)
+    symbol, market = result.symbol, result.market
+
+    existing = next(
+        (p for p in account.get_open_positions() if p.symbol == symbol), None
+    )
+    if existing is not None:
+        mark = price
+        upnl = (mark - existing.entry_price) * existing.quantity if existing.side == "LONG" else (existing.entry_price - mark) * existing.quantity
+        if show_position_status:
+            st.info(
+                f"Open {existing.side} on {symbol}: {existing.quantity:.6f} @ {existing.entry_price:,.4f} "
+                f"| mark {mark:,.4f} | uPnL ${upnl:,.2f}"
+            )
+            if st.button("Close this position", key=f"{key_prefix}_close", use_container_width=True):
+                account.close_position(existing.id, mark, reason="manual close")
+                persist()
+                st.rerun()
+        else:
+            st.caption(f"A {existing.side} position on {symbol} is already open (see below).")
+        return
+
+    c = st.columns(4)
+    stop_pct = c[0].number_input(
+        "Stop loss %", 0.1, 50.0, float(rm.config.stop_loss_pct * 100), step=0.1, key=f"{key_prefix}_sl"
+    ) / 100
+    tp_pct = c[1].number_input(
+        "Take profit %", 0.1, 100.0, float(rm.config.take_profit_pct * 100), step=0.1, key=f"{key_prefix}_tp"
+    ) / 100
+    basis = c[2].selectbox("Size by", ["Risk-based", "Fixed notional"], key=f"{key_prefix}_basis")
+    override = c[3].number_input(
+        "Qty override (0=auto)", 0.0, 1_000_000_000.0, 0.0, step=0.001, key=f"{key_prefix}_qty"
+    )
+
+    equity = account.get_equity({symbol: price})
+    sizing = rm.size_position(equity, price, price * (1 - stop_pct))
+    if basis == "Risk-based":
+        if sizing:
+            st.caption(
+                f"Auto size (risk-based): {sizing.details['quantity']:.6f} units, "
+                f"notional ${sizing.details['notional']:,.2f}, risk at stop ${sizing.details['risk_at_stop']:,.2f}."
+            )
+        else:
+            st.warning(sizing.reason)
+    else:
+        fixed_qty = (equity * rm.config.max_position_pct) / price if price > 0 else 0.0
+        st.caption(f"Auto size (fixed notional {rm.config.max_position_pct*100:.0f}%): {fixed_qty:.6f} units.")
+
+    b = st.columns(2)
+    buy = b[0].button("BUY (Long)", type="primary", use_container_width=True, key=f"{key_prefix}_buy")
+    sell = b[1].button("SELL (Short)", use_container_width=True, key=f"{key_prefix}_sell")
+
+    if buy or sell:
+        side = "LONG" if buy else "SHORT"
+        if side == "LONG":
+            stop_price, tp_price = price * (1 - stop_pct), price * (1 + tp_pct)
+        else:
+            stop_price, tp_price = price * (1 + stop_pct), price * (1 - tp_pct)
+
+        if override > 0:
+            qty = float(override)
+        elif basis == "Risk-based":
+            s = rm.size_position(equity, price, stop_price)
+            if not s:
+                st.error(f"Order rejected: {s.reason}")
+                return
+            qty = float(s.details["quantity"])
+        else:
+            qty = (equity * rm.config.max_position_pct) / price if price > 0 else 0.0
+
+        try:
+            account.open_position(
+                symbol=symbol, market=market, side=side, quantity=qty, price=price,
+                strategy="manual", reason="Quick paper order",
+                stop_loss=stop_price, take_profit=tp_price, timeframe=result.timeframe,
+            )
+        except ValueError as exc:
+            st.error(f"Order blocked: {exc}")
+            return
+        persist()
+        st.success(f"Opened {side} {qty:.6f} {symbol} at ~{price:,.4f}")
+        st.rerun()
+
+
 def page_chart(sb, result):
-    st.header("Interactive Chart")
+    st.header("Interactive Chart & Quick Trade")
     if not result.ok:
         st.warning(f"No data to chart: {result.error}")
         return
-    show_bb = st.checkbox("Show Bollinger Bands", value=False)
-    show_patterns = st.checkbox("Mark candlestick patterns", value=True)
-    df = st.session_state.signal_service.compute_indicators(result.df)
-    patterns = st.session_state.signal_service.patterns(result.df) if show_patterns else []
-    st.plotly_chart(candlestick_figure(df, show_bb=show_bb, patterns=patterns), use_container_width=True)
-    st.caption(
-        "Indicators are only shown once enough candles exist; early values are blank. "
-        "All timestamps are UTC. A data-freshness indicator is shown in the status banner."
+
+    df_all = st.session_state.signal_service.compute_indicators(result.df)
+
+    c1, c2 = st.columns([2, 1])
+    window = c1.radio(
+        "Show last", ["50", "100", "250", "500", "All"], index=3, horizontal=True, key="chart_window"
     )
+    chart_type = c2.radio(
+        "Chart type", ["Candlestick", "OHLC bars", "Line"], horizontal=True, key="chart_type"
+    )
+    t = st.columns(6)
+    show_ema = t[0].checkbox("EMA", value=True, key="c_ema")
+    show_bb = t[1].checkbox("Bollinger", value=False, key="c_bb")
+    show_volume = t[2].checkbox("Volume", value=True, key="c_vol")
+    show_rsi = t[3].checkbox("RSI", value=True, key="c_rsi")
+    show_macd = t[4].checkbox("MACD", value=True, key="c_macd")
+    show_patterns = t[5].checkbox("Patterns", value=True, key="c_pat")
+
+    n = None if window == "All" else int(window)
+    df = df_all if n is None else df_all.tail(n)
+
+    patterns = []
+    if show_patterns:
+        found = st.session_state.signal_service.patterns(result.df, tail=n or 400)
+        if found:
+            start = df.index[0]
+            patterns = [e for e in found if pd.Timestamp(e["timestamp"]) >= start]
+
+    st.plotly_chart(
+        build_chart_figure(
+            df,
+            chart_type=chart_type,
+            show_ema=show_ema,
+            show_bb=show_bb,
+            show_volume=show_volume,
+            show_rsi=show_rsi,
+            show_macd=show_macd,
+            patterns=patterns,
+        ),
+        use_container_width=True,
+    )
+    st.caption(
+        "Tip: use the chart toolbar (top-right) to box-zoom or scroll-zoom and to pan. "
+        "Use 'Show last' to focus on a recent period. Indicators appear only after enough "
+        "candles exist; early values are blank. All timestamps are UTC."
+    )
+
+    st.divider()
+    left, right = st.columns([3, 2])
+    with left:
+        st.subheader("Quick paper trade")
+        st.caption("Simulated only - no real orders are ever placed.")
+        render_quick_trade(result, key_prefix="chart")
+    with right:
+        st.subheader("Inspect a candle")
+        recent_ts = list(df.index[-40:])[::-1]
+        if recent_ts:
+            labels = [utc_str(ts) for ts in recent_ts]
+            sel = st.selectbox("Candle time (UTC)", labels, key="candle_inspect")
+            ts = recent_ts[labels.index(sel)]
+            row = df.loc[ts]
+            o, h, l, cl = float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])
+            chg = (cl - o) / o * 100 if o else 0.0
+            m = st.columns(2)
+            m[0].metric("Open", f"{o:,.4f}")
+            m[1].metric("High", f"{h:,.4f}")
+            m[0].metric("Low", f"{l:,.4f}")
+            m[1].metric("Close", f"{cl:,.4f}")
+            st.metric("Change (open to close)", f"{chg:+.2f}%")
+            ind = {}
+            for k in ("ema9", "ema21", "ema50", "rsi14", "macd", "macd_signal"):
+                if k in df.columns and pd.notna(row.get(k)):
+                    ind[k.upper()] = f"{float(row[k]):,.4f}"
+            if ind:
+                st.caption("Indicators at this candle: " + ", ".join(f"{k}={v}" for k, v in ind.items()))
+        else:
+            st.caption("No candles to inspect.")
 
 
 def page_signal_center(sb, result):
@@ -414,60 +634,11 @@ def page_paper_trading(sb, result):
     st.divider()
     st.subheader("Manual paper order")
     rm = account.risk_manager
-    cols = st.columns(4)
-    side = cols[0].selectbox("Side", ["LONG", "SHORT"])
-    stop_pct = cols[1].number_input("Stop loss %", 0.1, 50.0, float(rm.config.stop_loss_pct * 100), step=0.1) / 100
-    tp_pct = cols[2].number_input("Take profit %", 0.1, 100.0, float(rm.config.take_profit_pct * 100), step=0.1) / 100
-    sizing_basis = cols[3].selectbox("Quantity basis", ["Risk-based", "Fixed notional"])
-
-    entry_price = float(price)
-    if side == "LONG":
-        stop_price = entry_price * (1 - stop_pct)
-        tp_price = entry_price * (1 + tp_pct)
-    else:
-        stop_price = entry_price * (1 + stop_pct)
-        tp_price = entry_price * (1 - tp_pct)
-
-    if sizing_basis == "Risk-based":
-        sizing = rm.size_position(account.get_equity({result.symbol: entry_price}), entry_price, stop_price)
-        if sizing:
-            qty = sizing.details["quantity"]
-            st.caption(
-                f"Risk-based size: {qty:.6f} units, notional ${sizing.details['notional']:,.2f}, "
-                f"risk at stop ${sizing.details['risk_at_stop']:,.2f} "
-                f"({sizing.details['risk_pct']*100:.2f}% of equity, capped by {sizing.details['capped_by']})."
-            )
-        else:
-            st.error(sizing.reason)
-            qty = 0.0
-    else:
-        equity = account.get_equity({result.symbol: entry_price})
-        max_notional = equity * rm.config.max_position_pct
-        qty = max_notional / entry_price if entry_price > 0 else 0.0
-        st.caption(f"Fixed notional size: {qty:.6f} units (${max_notional:,.2f}).")
-
-    qty = st.number_input("Quantity (editable)", min_value=0.0, value=float(qty), format="%.6f")
-
-    if st.button("Open paper position", type="primary"):
-        check = account.validate_order(result.symbol, side, qty, entry_price)
-        if not check:
-            st.error(f"Order blocked: {check.reason}")
-        else:
-            account.open_position(
-                symbol=result.symbol,
-                market=result.market,
-                side=side,
-                quantity=qty,
-                price=entry_price,
-                strategy="manual",
-                reason="Manual paper order",
-                stop_loss=stop_price,
-                take_profit=tp_price,
-                timeframe=result.timeframe,
-            )
-            persist()
-            st.success(f"Opened {side} {qty:.6f} {result.symbol} at ~{entry_price:,.4f}")
-            st.rerun()
+    st.caption(
+        "Pick a direction. Sizing is risk-based (a stop-out risks ~1% of equity) "
+        "or fixed notional (5% of equity). A position is limited to one per symbol."
+    )
+    render_quick_trade(result, key_prefix="paper", show_position_status=False)
 
     st.divider()
     st.subheader("Open positions")
@@ -502,16 +673,17 @@ def page_paper_trading(sb, result):
         signal = st.session_state.signal_service.generate_signal(df)
         if signal.action in ("BUY", "SELL") and not account.has_open_position(result.symbol):
             side = "LONG" if signal.action == "BUY" else "SHORT"
-            stop_price = entry_price * (1 - rm.config.stop_loss_pct) if side == "LONG" else entry_price * (1 + rm.config.stop_loss_pct)
-            sizing = rm.size_position(account.get_equity({result.symbol: entry_price}), entry_price, stop_price)
+            entry = float(price)
+            stop_price = entry * (1 - rm.config.stop_loss_pct) if side == "LONG" else entry * (1 + rm.config.stop_loss_pct)
+            sizing = rm.size_position(account.get_equity({result.symbol: entry}), entry, stop_price)
             if sizing:
                 try:
                     account.open_position(
                         symbol=result.symbol, market=result.market, side=side,
-                        quantity=sizing.details["quantity"], price=entry_price,
+                        quantity=sizing.details["quantity"], price=entry,
                         strategy="EMA_RSI", reason=f"Auto: {signal.reason}",
                         stop_loss=stop_price,
-                        take_profit=entry_price * (1 + rm.config.take_profit_pct) if side == "LONG" else entry_price * (1 - rm.config.take_profit_pct),
+                        take_profit=entry * (1 + rm.config.take_profit_pct) if side == "LONG" else entry * (1 - rm.config.take_profit_pct),
                         timeframe=result.timeframe,
                     )
                     persist()
