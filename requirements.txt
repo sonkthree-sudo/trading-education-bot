@@ -1,0 +1,15 @@
+# Trading Education Bot - Paper Trading Simulator
+# Python 3.10+ required (developed and tested on 3.12).
+#
+# SAFETY: none of these packages can submit real orders. ccxt is used ONLY for
+# public market data (OHLCV). No API keys are required or accepted anywhere.
+
+streamlit>=1.40,<2
+pandas>=2.2,<4
+numpy>=1.26,<3
+plotly>=5.24,<8
+ccxt>=4.4,<5
+yfinance>=0.2.50,<2
+python-dotenv>=1.0,<2
+requests>=2.32,<3
+pytest>=8.0,<10

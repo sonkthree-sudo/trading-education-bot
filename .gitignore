@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Logs and local data
+*.log
+logs/*.log
+!logs/.gitkeep
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/backup_*.db
+!data/.gitkeep
+
+# Secrets / environment
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/settings.json.bak
+
+# Test / tooling caches
+.pytest_cache/
+.coverage
+htmlcov/
